@@ -994,9 +994,16 @@ function generateTypeGuard(
     ? `if (${shortCircuitCondition}) return true\n`
     : ''
 
-  const functionBody = `const ${innerObjName} = ${signatureObjName} as ${typeName}\nreturn (\n${
-    conditions || true
-  }\n)\n}\n`
+  // A union body has no enclosing property-level evaluate to report a total
+  // mismatch, so wrap the body in evaluate ourselves.
+  const isUnionBody = typeDeclaration.getType().isUnion()
+  const returnExpression =
+    debug && isUnionBody && conditions
+      ? `evaluate(${conditions}, argumentName, ${JSON.stringify(
+          typeName
+        )}, ${signatureObjName})`
+      : conditions || true
+  const functionBody = `const ${innerObjName} = ${signatureObjName} as ${typeName}\nreturn (\n${returnExpression}\n)\n}\n`
 
   return [signature, shortCircuit, functionBody].join('')
 }

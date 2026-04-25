@@ -1079,15 +1079,15 @@ export interface IGenerateOptions {
   processOptions: Readonly<IProcessOptions>
 }
 
-const evaluateFunction = `let __evaluateBuffer: Array<unknown[]> | null = null
-function evaluate(isCorrect: boolean, varName: string, expected: string, actual: any): boolean {
+const evaluateBufferDecl = `let __evaluateBuffer: Array<unknown[]> | null = null\n`
+const evaluateFn = `function evaluate(isCorrect: boolean, varName: string, expected: string, actual: any): boolean {
   if (!isCorrect) {
     const args: unknown[] = [\`\${varName} type mismatch, expected: \${expected}, found:\`, actual]
     __evaluateBuffer ? __evaluateBuffer.push(args) : console.error(...args)
   }
   return isCorrect
-}
-function evaluateUnion(varName: string, expected: string, actual: any, ...branches: Array<() => boolean>): boolean {
+}\n`
+const evaluateUnionFn = `function evaluateUnion(varName: string, expected: string, actual: any, ...branches: Array<() => boolean>): boolean {
   const previous = __evaluateBuffer
   const collected: Array<unknown[]> = []
   for (const fn of branches) {
@@ -1102,6 +1102,17 @@ function evaluateUnion(varName: string, expected: string, actual: any, ...branch
   else collected.forEach(a => console.error(...a))
   return false
 }\n`
+
+function buildEvaluateHelpers(body: string): string {
+  const usesEvaluate = body.includes('evaluate(')
+  const usesEvaluateUnion = body.includes('evaluateUnion(')
+  if (!usesEvaluate && !usesEvaluateUnion) return ''
+  return (
+    evaluateBufferDecl +
+    (usesEvaluate ? evaluateFn : '') +
+    (usesEvaluateUnion ? evaluateUnionFn : '')
+  )
+}
 
 export async function generate({
   paths = [],
@@ -1231,7 +1242,8 @@ export function processProject(
 
     if (functions.length > 0) {
       if (options.debug) {
-        functions.unshift(evaluateFunction)
+        const helpers = buildEvaluateHelpers(functions.join('\n'))
+        if (helpers) functions.unshift(helpers)
       }
 
       outFile.addStatements(functions.join('\n'))

@@ -21,21 +21,6 @@ testProcessProject(
         }
         return isCorrect
       }
-      function evaluateUnion(varName: string, expected: string, actual: any, ...branches: Array<() => boolean>): boolean {
-        const previous = __evaluateBuffer
-        const collected: Array<unknown[]> = []
-        for (const fn of branches) {
-          const branchBuffer: Array<unknown[]> = []
-          __evaluateBuffer = branchBuffer
-          if (fn()) { __evaluateBuffer = previous; return true }
-          collected.push(...branchBuffer)
-        }
-        __evaluateBuffer = previous
-        collected.push([\`\${varName} type mismatch, expected: \${expected}, found:\`, actual])
-        if (previous) collected.forEach(a => previous.push(a))
-        else collected.forEach(a => console.error(...a))
-        return false
-      }
 
       export function isTestType(obj: unknown, argumentName: string = "testType"): obj is TestType {
           const typedObj = obj as TestType

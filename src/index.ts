@@ -220,25 +220,27 @@ function typeUnionConditions(
   outFile: SourceFile,
   options: IProcessOptions
 ): string {
-  const conditions: string[] = []
-  conditions.push(
-    ...(types
-      .map(type =>
-        typeConditions(
-          varName,
-          type,
-          addDependency,
-          project,
-          path,
-          arrayDepth,
-          true,
-          records,
-          outFile,
-          options
-        )
+  const branchConditions = types
+    .map(type =>
+      typeConditions(
+        varName,
+        type,
+        addDependency,
+        project,
+        path,
+        arrayDepth,
+        true,
+        records,
+        outFile,
+        options
       )
-      .filter(v => v !== null) as string[])
-  )
+    )
+    .filter(v => v !== null) as string[]
+  // Silence nested evaluate() calls in non-matching branches so they don't log
+  // before a later branch matches.
+  const conditions = options.debug
+    ? branchConditions.map(c => `evaluateQuietly(() => (${c}))`)
+    : branchConditions
   return ors(...conditions)
 }
 
@@ -1051,13 +1053,22 @@ export interface IGenerateOptions {
   processOptions: Readonly<IProcessOptions>
 }
 
-const evaluateFunction = `function evaluate(
+const evaluateFunction = `let __evaluateQuietDepth = 0
+function evaluateQuietly<T>(fn: () => T): T {
+  __evaluateQuietDepth++
+  try {
+    return fn()
+  } finally {
+    __evaluateQuietDepth--
+  }
+}
+function evaluate(
   isCorrect: boolean,
   varName: string,
   expected: string,
   actual: any
 ): boolean {
-  if (!isCorrect) {
+  if (!isCorrect && __evaluateQuietDepth === 0) {
     console.error(
       \`\${varName} type mismatch, expected: \${expected}, found:\`,
       actual

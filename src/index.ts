@@ -1,6 +1,5 @@
 /* eslint-disable @typescript-eslint/no-non-null-assertion */
 
-import { FileUtils } from '@ts-morph/common'
 import {
   EnumDeclaration,
   ExportableNode,
@@ -25,6 +24,12 @@ const fileExtensionRegex = /\.(ts|mts|cts|tsx|d\.ts)$/iu
 
 function reportError(message: string, ...args: unknown[]) {
   console.error(`ERROR: ${message}`, ...args)
+}
+
+// Strip the project root from absolute paths so debug output stays OS-agnostic
+function relativizeImports(text: string, outFile: SourceFile): string {
+  const projectDir = outFile.getProject().getFileSystem().getCurrentDirectory()
+  return projectDir === '/' ? text : text.replaceAll(projectDir, '.')
 }
 
 function lowerFirst(s: string): string {
@@ -237,11 +242,10 @@ function typeUnionConditions(
     )
     .filter(v => v !== null) as string[]
   if (options.debug) {
-    let expectedType = types.map(t => t.getText()).join(' | ')
-    if (expectedType.indexOf('import') > -1) {
-      const standardizedCwd = FileUtils.standardizeSlashes(process.cwd())
-      expectedType = expectedType.replace(standardizedCwd, '.')
-    }
+    const expectedType = relativizeImports(
+      types.map(t => t.getText()).join(' | '),
+      outFile
+    )
     const branchFns = branchConditions.map(c => `() => (${c})`).join(', ')
     return `evaluateUnion(\`${path}\`, ${JSON.stringify(
       expectedType
@@ -790,7 +794,6 @@ function propertyConditions(
   const varName = `${objName}["${strippedName}"]`
   const propertyPath = `${path}["${strippedName}"]`
 
-  let expectedType = property.type.getText()
   const conditions = typeConditions(
     varName,
     property.type,
@@ -807,10 +810,7 @@ function propertyConditions(
     // Union types self-report via evaluateUnion (inline) or the called
     // guard's own evaluateUnion (named). Wrapping again would duplicate.
     if (property.type.isUnion()) return conditions
-    if (expectedType.indexOf('import') > -1) {
-      const standardizedCwd = FileUtils.standardizeSlashes(process.cwd())
-      expectedType = expectedType.replace(standardizedCwd, '.')
-    }
+    const expectedType = relativizeImports(property.type.getText(), outFile)
     return (
       conditions &&
       `evaluate(${conditions}, \`${propertyPath}\`, ${JSON.stringify(
@@ -884,7 +884,7 @@ function indexSignatureConditions(
   options: IProcessOptions
 ): string | null {
   const { debug } = options
-  const expectedType = index.type.getText()
+  const expectedType = relativizeImports(index.type.getText(), outFile)
   const conditions = typeConditions(
     objName,
     index.type,

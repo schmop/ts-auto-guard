@@ -13,28 +13,28 @@ testProcessProject(
     'test.guard.ts': `
       import { TestType } from "./test";
   
-      let __evaluateQuietDepth = 0
-      function evaluateQuietly<T>(fn: () => T): T {
-        __evaluateQuietDepth++
-        try {
-          return fn()
-        } finally {
-          __evaluateQuietDepth--
-        }
-      }
-      function evaluate(
-        isCorrect: boolean,
-        varName: string,
-        expected: string,
-        actual: any
-      ): boolean {
-        if (!isCorrect && __evaluateQuietDepth === 0) {
-          console.error(
-            \`\${varName} type mismatch, expected: \${expected}, found:\`,
-                        actual
-            )
+      let __evaluateBuffer: Array<unknown[]> | null = null
+      function evaluate(isCorrect: boolean, varName: string, expected: string, actual: any): boolean {
+        if (!isCorrect) {
+          const args: unknown[] = [\`\${varName} type mismatch, expected: \${expected}, found:\`, actual]
+          __evaluateBuffer ? __evaluateBuffer.push(args) : console.error(...args)
         }
         return isCorrect
+      }
+      function evaluateUnion(varName: string, expected: string, actual: any, ...branches: Array<() => boolean>): boolean {
+        const previous = __evaluateBuffer
+        const collected: Array<unknown[]> = []
+        for (const fn of branches) {
+          const branchBuffer: Array<unknown[]> = []
+          __evaluateBuffer = branchBuffer
+          if (fn()) { __evaluateBuffer = previous; return true }
+          collected.push(...branchBuffer)
+        }
+        __evaluateBuffer = previous
+        collected.push([\`\${varName} type mismatch, expected: \${expected}, found:\`, actual])
+        if (previous) collected.forEach(a => previous.push(a))
+        else collected.forEach(a => console.error(...a))
+        return false
       }
 
       export function isTestType(obj: unknown, argumentName: string = "testType"): obj is TestType {

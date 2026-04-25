@@ -150,9 +150,20 @@ test(
         isFooOrBar(notFooOrBar),
         'isFooOrBar should return false for a value matching neither branch'
       )
+      const flat = errors.map(args =>
+        args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')
+      )
       t.ok(
-        errors.length > 0,
-        'console.error should be called when isFooOrBar returns false'
+        flat.some(s => s.includes('"foo"')),
+        'should surface the Foo branch failure (kind !== "foo")'
+      )
+      t.ok(
+        flat.some(s => s.includes('"bar"')),
+        'should surface the Bar branch failure (kind !== "bar")'
+      )
+      t.ok(
+        flat.some(s => s.includes('Foo') && s.includes('Bar') && s.includes('|')),
+        'should surface the union-level summary'
       )
     } finally {
       console.error = originalError

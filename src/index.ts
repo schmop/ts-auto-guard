@@ -236,12 +236,18 @@ function typeUnionConditions(
       )
     )
     .filter(v => v !== null) as string[]
-  // Silence nested evaluate() calls in non-matching branches so they don't log
-  // before a later branch matches.
-  const conditions = options.debug
-    ? branchConditions.map(c => `evaluateQuietly(() => (${c}))`)
-    : branchConditions
-  return ors(...conditions)
+  if (options.debug) {
+    let expectedType = types.map(t => t.getText()).join(' | ')
+    if (expectedType.indexOf('import') > -1) {
+      const standardizedCwd = FileUtils.standardizeSlashes(process.cwd())
+      expectedType = expectedType.replace(standardizedCwd, '.')
+    }
+    const branchFns = branchConditions.map(c => `() => (${c})`).join(', ')
+    return `evaluateUnion(\`${path}\`, ${JSON.stringify(
+      expectedType
+    )}, ${varName}, ${branchFns})`
+  }
+  return ors(...branchConditions)
 }
 
 function typeIntersectionConditions(
@@ -618,12 +624,19 @@ function reusedCondition(
   records: readonly IRecord[],
   outFile: SourceFile,
   addDependency: IAddDependency,
-  varName: string
+  varName: string,
+  path: string,
+  debug: boolean
 ): string | null {
   const record = records.find(x => x.typeDeclaration.getType() === type)
   if (record) {
     if (record.outFile !== outFile) {
       addDependency(record.outFile, record.guardName, false)
+    }
+    // Pass the caller's path as argumentName so the called guard's logs use
+    // the caller's location instead of its own default name.
+    if (debug) {
+      return `${record.guardName}(${varName}, \`${path}\`) as boolean`
     }
     return `${record.guardName}(${varName}) as boolean`
   }
@@ -642,7 +655,15 @@ function typeConditions(
   outFile: SourceFile,
   options: IProcessOptions
 ): string | null {
-  const reused = reusedCondition(type, records, outFile, addDependency, varName)
+  const reused = reusedCondition(
+    type,
+    records,
+    outFile,
+    addDependency,
+    varName,
+    path,
+    options.debug === true
+  )
   if (useGuard && reused) {
     return reused
   }
@@ -783,6 +804,9 @@ function propertyConditions(
     options
   )
   if (debug) {
+    // Union types self-report via evaluateUnion (inline) or the called
+    // guard's own evaluateUnion (named). Wrapping again would duplicate.
+    if (property.type.isUnion()) return conditions
     if (expectedType.indexOf('import') > -1) {
       const standardizedCwd = FileUtils.standardizeSlashes(process.cwd())
       expectedType = expectedType.replace(standardizedCwd, '.')
@@ -882,11 +906,13 @@ function indexSignatureConditions(
   }
   if (debug) {
     const cleanKeyReplacer = '${key.toString().replace(/"/g, \'\\\\"\')}'
-    const evaluation =
-      conditions &&
-      `evaluate(${conditions}, \`${path}["${cleanKeyReplacer}"]\`, ${JSON.stringify(
-        expectedType
-      )}, ${objName})`
+    // Union value types self-report; wrapping again would duplicate.
+    const evaluation = index.type.isUnion()
+      ? conditions
+      : conditions &&
+        `evaluate(${conditions}, \`${path}["${cleanKeyReplacer}"]\`, ${JSON.stringify(
+          expectedType
+        )}, ${objName})`
     const keyEvaluation =
       keyConditions &&
       `evaluate(${keyConditions}, \`${path} (key: "${cleanKeyReplacer}")\`, ${JSON.stringify(
@@ -994,16 +1020,9 @@ function generateTypeGuard(
     ? `if (${shortCircuitCondition}) return true\n`
     : ''
 
-  // A union body has no enclosing property-level evaluate to report a total
-  // mismatch, so wrap the body in evaluate ourselves.
-  const isUnionBody = typeDeclaration.getType().isUnion()
-  const returnExpression =
-    debug && isUnionBody && conditions
-      ? `evaluate(${conditions}, argumentName, ${JSON.stringify(
-          typeName
-        )}, ${signatureObjName})`
-      : conditions || true
-  const functionBody = `const ${innerObjName} = ${signatureObjName} as ${typeName}\nreturn (\n${returnExpression}\n)\n}\n`
+  const functionBody = `const ${innerObjName} = ${signatureObjName} as ${typeName}\nreturn (\n${
+    conditions || true
+  }\n)\n}\n`
 
   return [signature, shortCircuit, functionBody].join('')
 }
@@ -1060,28 +1079,28 @@ export interface IGenerateOptions {
   processOptions: Readonly<IProcessOptions>
 }
 
-const evaluateFunction = `let __evaluateQuietDepth = 0
-function evaluateQuietly<T>(fn: () => T): T {
-  __evaluateQuietDepth++
-  try {
-    return fn()
-  } finally {
-    __evaluateQuietDepth--
-  }
-}
-function evaluate(
-  isCorrect: boolean,
-  varName: string,
-  expected: string,
-  actual: any
-): boolean {
-  if (!isCorrect && __evaluateQuietDepth === 0) {
-    console.error(
-      \`\${varName} type mismatch, expected: \${expected}, found:\`,
-      actual
-    )
+const evaluateFunction = `let __evaluateBuffer: Array<unknown[]> | null = null
+function evaluate(isCorrect: boolean, varName: string, expected: string, actual: any): boolean {
+  if (!isCorrect) {
+    const args: unknown[] = [\`\${varName} type mismatch, expected: \${expected}, found:\`, actual]
+    __evaluateBuffer ? __evaluateBuffer.push(args) : console.error(...args)
   }
   return isCorrect
+}
+function evaluateUnion(varName: string, expected: string, actual: any, ...branches: Array<() => boolean>): boolean {
+  const previous = __evaluateBuffer
+  const collected: Array<unknown[]> = []
+  for (const fn of branches) {
+    const branchBuffer: Array<unknown[]> = []
+    __evaluateBuffer = branchBuffer
+    if (fn()) { __evaluateBuffer = previous; return true }
+    collected.push(...branchBuffer)
+  }
+  __evaluateBuffer = previous
+  collected.push([\`\${varName} type mismatch, expected: \${expected}, found:\`, actual])
+  if (previous) collected.forEach(a => previous.push(a))
+  else collected.forEach(a => console.error(...a))
+  return false
 }\n`
 
 export async function generate({

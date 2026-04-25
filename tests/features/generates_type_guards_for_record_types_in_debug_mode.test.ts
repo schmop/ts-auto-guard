@@ -13,13 +13,22 @@ testProcessProject(
     'test.guard.ts': `
       import { TestType } from "./test";
   
+      let __evaluateQuietDepth = 0
+      function evaluateQuietly<T>(fn: () => T): T {
+        __evaluateQuietDepth++
+        try {
+          return fn()
+        } finally {
+          __evaluateQuietDepth--
+        }
+      }
       function evaluate(
         isCorrect: boolean,
         varName: string,
         expected: string,
         actual: any
       ): boolean {
-        if (!isCorrect) {
+        if (!isCorrect && __evaluateQuietDepth === 0) {
           console.error(
             \`\${varName} type mismatch, expected: \${expected}, found:\`,
                         actual

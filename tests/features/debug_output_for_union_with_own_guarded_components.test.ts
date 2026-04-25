@@ -87,3 +87,76 @@ test(
     t.end()
   }
 )
+
+test(
+  'debug output is printed when a union of own-guarded components does not match',
+  t => {
+    const project = new Project({
+      skipAddingFilesFromTsConfig: true,
+      compilerOptions: {
+        strict: true,
+        target: 8 /* ES2021 */,
+        module: 1 /* CommonJS */,
+        esModuleInterop: true,
+      },
+      useInMemoryFileSystem: true,
+    })
+
+    project.createSourceFile(
+      'test.ts',
+      `
+      /** @see {isFoo} ts-auto-guard:type-guard */
+      export interface Foo {
+        kind: 'foo'
+        foo: number
+      }
+
+      /** @see {isBar} ts-auto-guard:type-guard */
+      export interface Bar {
+        kind: 'bar'
+        bar: string
+      }
+
+      /** @see {isFooOrBar} ts-auto-guard:type-guard */
+      export type FooOrBar = Foo | Bar
+      `
+    )
+
+    processProject(project, { debug: true })
+
+    const guardFile = project.getSourceFileOrThrow('test.guard.ts')
+    const emittedJs = guardFile.getEmitOutput().getOutputFiles()[0].getText()
+
+    const moduleObj: { exports: Record<string, unknown> } = { exports: {} }
+    const requireStub = () => ({})
+    new Function('exports', 'require', 'module', emittedJs)(
+      moduleObj.exports,
+      requireStub,
+      moduleObj
+    )
+
+    const isFooOrBar = moduleObj.exports.isFooOrBar as (
+      obj: unknown
+    ) => boolean
+
+    const errors: unknown[][] = []
+    const originalError = console.error
+    console.error = (...args: unknown[]) => {
+      errors.push(args)
+    }
+    try {
+      const notFooOrBar: unknown = { kind: 'baz', baz: true }
+      t.false(
+        isFooOrBar(notFooOrBar),
+        'isFooOrBar should return false for a value matching neither branch'
+      )
+      t.ok(
+        errors.length > 0,
+        'console.error should be called when isFooOrBar returns false'
+      )
+    } finally {
+      console.error = originalError
+    }
+    t.end()
+  }
+)
